@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*$py.class
+app/crud/__pycache__/
+app/models/__pycache__/
+app/processors/__pycache__/
+app/schemas/__pycache__/
+app/services/__pycache__/
+migrations/__pycache__/
+data/
+.env
+venv/
+migrations/versions/__pycache__/
+
+

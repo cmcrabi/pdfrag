@@ -1,0 +1,44 @@
+# Database
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.27
+pgvector>=0.2.5
+alembic==1.13.1
+
+# PDF Processing
+PyMuPDF==1.23.26  # For PDF text and image extraction
+python-multipart==0.0.9
+pdf2image==1.17.0
+camelot-py==0.11.0  # For table extraction
+opencv-python==4.9.0.80
+
+# Vector Embeddings
+sentence-transformers==2.5.1
+
+# Environment and Config
+python-dotenv==1.0.1
+pydantic==2.6.1
+pydantic-settings==2.1.0
+
+# API Framework
+fastapi==0.109.2
+uvicorn==0.27.1
+httpx==0.26.0  # Explicitly added for OpenAI client compatibility
+
+# LLM Providers
+openai==1.12.0
+google-genai==1.9.0  # For Gemini support
+
+# Utilities
+numpy==1.26.4
+pandas==2.2.1
+
+# Added from the code block
+pgvector==0.2.5
+
+# Added from the code block
+langchain==0.1.9
+langchain-openai==0.0.5
+pypdf==4.0.2
+streamlit==1.31.1
+requests==2.31.0
+markdown==3.5.2 
