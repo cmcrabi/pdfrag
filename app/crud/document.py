@@ -15,16 +15,17 @@ def create_document(db: Session, document: DocumentCreate) -> Document:
         content_type=document.content_type,
         file_path=document.file_path,
         file_hash=document.file_hash,
-        original_filename=document.original_filename
+        original_filename=document.original_filename,
+        product_id=document.product_id
     )
     try:
         db.add(db_document)
         db.commit()
         db.refresh(db_document)
         return db_document
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
-        raise ValueError("Document with this hash already exists")
+        raise e
 
 def get_document(db: Session, document_id: int):
     return db.query(Document).filter(Document.id == document_id).first()

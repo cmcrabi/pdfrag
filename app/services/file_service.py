@@ -55,11 +55,6 @@ class FileService:
                 os.remove(file_path)
             raise
 
-    async def check_file_exists(self, file_hash: str) -> bool:
-        """Check if a file with the same hash exists in the database."""
-        # This will be implemented in the document service
-        pass
-
     def delete_file(self, file_path: str):
         """Delete a file from the raw directory."""
         try:

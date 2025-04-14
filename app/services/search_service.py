@@ -3,6 +3,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.services.embedding_service import EmbeddingService
 import logging
+import json
+from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +19,12 @@ class SearchService:
         limit: int = 5,
         threshold: float = 0.3,
         document_id: Optional[int] = None,
+        product_id: Optional[int] = None,
         context_pages: int = 3  # Number of pages to include before and after a match
     ) -> List[Dict]:
         """
         Search for similar content using vector similarity and include context pages.
+        Can filter by document_id or product_id.
         """
         try:
             # Debug: Check all documents and their vectorization status
@@ -78,12 +82,13 @@ class SearchService:
                     dc.chunk_metadata,
                     d.filename,
                     d.version,
+                    d.product_id,
                     1 - (dc.embedding <=> CAST(:embedding AS vector(384))) as similarity,
                     (dc.chunk_metadata->>'page_number')::int as page_number
                 FROM document_chunks dc
                 JOIN documents d ON d.id = dc.document_id
                 WHERE 1 - (dc.embedding <=> CAST(:embedding AS vector(384))) > :threshold
-                {document_filter}
+                {filter_clause}
                 ORDER BY similarity DESC
                 LIMIT :limit
             ),
@@ -95,6 +100,7 @@ class SearchService:
                     dc.chunk_metadata,
                     d.filename,
                     d.version,
+                    d.product_id,
                     (dc.chunk_metadata->>'page_number')::int as page_number,
                     im.similarity as original_similarity
                 FROM document_chunks dc
@@ -103,7 +109,7 @@ class SearchService:
                 WHERE (dc.chunk_metadata->>'page_number')::int 
                     BETWEEN (im.page_number - :context_pages) 
                     AND (im.page_number + :context_pages)
-                {document_filter}
+                {filter_clause}
             )
             SELECT 
                 cc.*,
@@ -133,9 +139,23 @@ class SearchService:
             ORDER BY cc.original_similarity DESC, cc.page_number ASC
             """
 
-            # Add document filter if specified
-            document_filter = "AND dc.document_id = :document_id" if document_id else ""
-            sql = sql.format(document_filter=document_filter)
+            # Build filter clause and parameters
+            params = {
+                "embedding": query_embedding,
+                "threshold": threshold,
+                "limit": limit,
+                "context_pages": context_pages,
+            }
+            filter_clause = ""
+            if document_id:
+                filter_clause = "AND d.document_id = :document_id"
+                params["document_id"] = document_id
+            elif product_id:
+                filter_clause = "AND d.product_id = :product_id"
+                params["product_id"] = product_id
+
+            # Add filter clause to SQL
+            sql = sql.format(filter_clause=filter_clause)
 
             # Log the complete query with parameters for manual testing
             test_query = sql.replace(":embedding", f"'{query_embedding}'::vector")
@@ -143,19 +163,12 @@ class SearchService:
             test_query = test_query.replace(":limit", str(limit))
             if document_id:
                 test_query = test_query.replace(":document_id", str(document_id))
+            elif product_id:
+                test_query = test_query.replace(":product_id", str(product_id))
             #logger.info("Complete SQL query for manual testing:\n" + test_query)
 
             # Execute query
-            result = self.db.execute(
-                text(sql),
-                {
-                    "embedding": query_embedding,
-                    "threshold": threshold,
-                    "limit": limit,
-                    "context_pages": context_pages,
-                    "document_id": document_id
-                }
-            )
+            result = self.db.execute(text(sql), params)
 
             # Process results and group by context
             results = []
@@ -170,7 +183,7 @@ class SearchService:
                     continue
                 seen_chunks.add(row.id)
 
-                # Process images to remove duplicates
+                # Process images to remove duplicates based on filename (original logic)
                 unique_images = []
                 for img in (row.images or []):
                     if img['filename'] not in seen_images:
@@ -182,7 +195,8 @@ class SearchService:
                     "document": {
                         "id": row.document_id,
                         "filename": row.filename,
-                        "version": row.version
+                        "version": row.version,
+                        "product_id": row.product_id
                     },
                     "metadata": {
                         "page_number": row.page_number,
@@ -210,15 +224,19 @@ class SearchService:
                         })
                     current_context = result_item
                     current_group = [result_item]
-                else:
+                # Only add context pages if they belong to a relevant context
+                elif current_context: 
                     current_group.append(result_item)
 
             # Add the last group if it exists
-            if current_group:
+            if current_group and current_context:
                 # Remove duplicate pages within the last group
                 unique_pages = []
                 seen_page_numbers = set()
                 for page in current_group:
+                    # Avoid adding the context page itself to the 'pages' list if it's the only item
+                    if current_context and page['content'] == current_context['content'] and len(current_group) == 1:
+                         continue
                     if page['metadata']['page_number'] not in seen_page_numbers:
                         unique_pages.append(page)
                         seen_page_numbers.add(page['metadata']['page_number'])
@@ -236,7 +254,7 @@ class SearchService:
             return results
 
         except Exception as e:
-            logger.error(f"Error in similarity search: {str(e)}")
+            logger.error(f"Error in similarity search: {str(e)}", exc_info=True)
             raise
 
     async def search_by_region(
@@ -247,38 +265,58 @@ class SearchService:
         limit: int = 5
     ) -> List[Dict]:
         """
-        Search for similar content using a selected region from a document.
+        Search for similar content using a selected region from a document,
+        constraining the search to the same product.
         """
         try:
-            # Find the chunk that contains this region
-            sql = """
+            # Step 1: Find the document and its product_id
+            doc_sql = """
+            SELECT product_id 
+            FROM documents 
+            WHERE id = :document_id
+            """
+            doc_result = self.db.execute(text(doc_sql), {"document_id": document_id}).first()
+            if not doc_result:
+                 raise ValueError(f"Document with ID {document_id} not found.")
+            source_product_id = doc_result.product_id
+            logger.info(f"Searching region from document ID {document_id} (Product ID: {source_product_id})")
+            
+            # Step 2: Find the chunk content that contains this region
+            chunk_sql = """
             SELECT content
             FROM document_chunks
             WHERE document_id = :document_id
             AND (chunk_metadata->>'page_number')::int = :page_number
-            AND chunk_metadata->>'bbox' @> :bbox::jsonb
+            AND chunk_metadata->>'bbox' @> CAST(:bbox AS jsonb)
             LIMIT 1
             """
             
-            result = self.db.execute(
-                text(sql),
+            chunk_result = self.db.execute(
+                text(chunk_sql),
                 {
                     "document_id": document_id,
                     "page_number": page_number,
-                    "bbox": bbox
+                    "bbox": json.dumps(bbox) # Ensure bbox is proper JSON string for query
                 }
             ).first()
 
-            if not result:
+            if not chunk_result or not chunk_result.content:
+                logger.warning(f"No content found for region in doc {document_id}, page {page_number}, bbox {bbox}")
                 return []
 
-            # Use the found content as query
+            # Step 3: Use the found content as query, filtering by the original product_id
+            logger.info(f"Using content from region as query, searching within product {source_product_id}")
             return await self.search(
-                query=result.content,
+                query=chunk_result.content,
                 limit=limit,
-                document_id=None  # Search across all documents
+                product_id=source_product_id, # Pass the fetched product_id
+                document_id=None # Ensure we don't filter by the source document ID itself
             )
 
+        except ValueError as e:
+             logger.error(f"Value error in region search: {str(e)}")
+             # Re-raise or return empty list depending on desired API behavior for non-existent doc
+             raise HTTPException(status_code=404, detail=str(e)) 
         except Exception as e:
-            logger.error(f"Error in region search: {str(e)}")
+            logger.error(f"Error in region search: {str(e)}", exc_info=True)
             raise 

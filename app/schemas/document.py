@@ -14,6 +14,7 @@ class DocumentCreate(DocumentBase):
     file_path: str
     file_hash: str
     original_filename: str
+    product_id: int
 
     @field_validator('file_path')
     @classmethod
@@ -22,8 +23,12 @@ class DocumentCreate(DocumentBase):
         return v.replace('\\', '/')
 
 
-class Document(DocumentCreate):
+class Document(DocumentBase):
     id: int
+    file_path: str
+    file_hash: str
+    original_filename: str
+    product_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
 
