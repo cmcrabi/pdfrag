@@ -22,7 +22,7 @@ pydantic-settings==2.1.0
 # API Framework
 fastapi==0.109.2
 uvicorn==0.27.1
-httpx==0.26.0  # Explicitly added for OpenAI client compatibility
+httpx==0.28.1  # Updated to satisfy google-genai
 
 # LLM Providers
 openai==1.12.0
